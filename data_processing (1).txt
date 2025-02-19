@@ -1,0 +1,65 @@
+import warnings
+import h5py as h5
+import numpy as np
+import pandas as pd
+
+class SHARKDataProcessor:
+    def __init__(self, h0=0.6751, Gyr2yr=1e9):
+        self.h0 = h0
+        self.Gyr2yr = Gyr2yr
+        warnings.filterwarnings('ignore', message='invalid value encountered in divide')
+
+    def SHARK_parallel_read(self, shark_file, sv):
+        shark_hdf5 = h5.File(shark_file, 'r')
+        gal_sv = {}
+
+        gal_sv['ID_galaxy']=np.array([f'{sv}_{gid}' for gid in shark_hdf5['galaxies']['id_galaxy'][()]])
+        gal_sv['ID_subhalo']=np.array([f'{sv}_{hid}' for hid in shark_hdf5['galaxies']['id_subhalo'][()]])
+        gal_sv['ID_subhalo_tree']=np.array([f'{sv}_{hid}' for hid in shark_hdf5['galaxies']['id_subhalo_tree'][()]])
+        gal_sv['ID_halo']=np.array([f'{sv}_{hid}' for hid in shark_hdf5['galaxies']['id_halo'][()]])
+        gal_sv['sv']=(np.ones(len(shark_hdf5['galaxies']['id_galaxy'][()]))*sv).astype('int')
+        gal_sv['type']=shark_hdf5['galaxies']['type'][()]
+        # Halo masses
+        gal_sv['Mhalo_host']=shark_hdf5['galaxies']['mvir_hosthalo'][()].astype('float64')/self.h0
+        gal_sv['Mhalo']=shark_hdf5['galaxies']['mvir_subhalo'][()].astype('float64')/self.h0
+        # Stellar masses
+        gal_sv['Mstar_bulge']=shark_hdf5['galaxies']['mstars_bulge'][()].astype('float64')/self.h0
+        gal_sv['Mstar_disc']=shark_hdf5['galaxies']['mstars_disk'][()].astype('float64')/self.h0
+        gal_sv['Mstar_all']=gal_sv['Mstar_bulge']+gal_sv['Mstar_disc']
+        gal_sv['Mstar_stripped']=shark_hdf5['galaxies']['mstars_tidally_stripped'][()].astype('float64')/self.h0
+        # Gas masses
+        gal_sv['Mhotgas']=shark_hdf5['galaxies']['mhot'][()].astype('float64')/self.h0
+        gal_sv['Mcoldgas_bulge']=shark_hdf5['galaxies']['mgas_bulge'][()].astype('float64')/self.h0
+        gal_sv['Mcoldgas_disc']=shark_hdf5['galaxies']['mgas_disk'][()].astype('float64')/self.h0 
+        gal_sv['Mcoldgas_all']=gal_sv['Mcoldgas_bulge']+gal_sv['Mcoldgas_disc']
+        # Galaxy sizes
+        gal_sv['Rgas_bulge']=1e3*shark_hdf5['galaxies']['rgas_bulge'][()].astype('float64')/self.h0
+        gal_sv['Rgas_disc']=1e3*shark_hdf5['galaxies']['rgas_disk'][()].astype('float64')/self.h0
+        gal_sv['Rgas_all']=(gal_sv['Mstar_bulge']*gal_sv['Rgas_bulge']+gal_sv['Mstar_disc']*gal_sv['Rgas_disc'])/gal_sv['Mstar_all']
+        gal_sv['Rstar_bulge']=1e3*shark_hdf5['galaxies']['rstar_bulge'][()].astype('float64')/self.h0
+        gal_sv['Rstar_disc']=1e3*shark_hdf5['galaxies']['rstar_disk'][()].astype('float64')/self.h0
+        gal_sv['Rstar_all']=(gal_sv['Mstar_bulge']*gal_sv['Rstar_bulge']+gal_sv['Mstar_disc']*gal_sv['Rstar_disc'])/gal_sv['Mstar_all']
+        # SFR
+        gal_sv['SFR_bulge']=shark_hdf5['galaxies']['sfr_burst'][()].astype('float64')/(self.h0*self.Gyr2yr)
+        gal_sv['SFR_disc']=shark_hdf5['galaxies']['sfr_disk'][()].astype('float64')/(self.h0*self.Gyr2yr)
+        gal_sv['SFR_all']=gal_sv['SFR_bulge']+gal_sv['SFR_disc']
+        # BH properties
+        gal_sv['MBH']=shark_hdf5['galaxies']['m_bh'][()].astype('float64')/self.h0
+        gal_sv['MBHacc_cold']=shark_hdf5['galaxies']['bh_accretion_rate_sb'][()].astype('float64')/(self.h0*self.Gyr2yr)
+        gal_sv['MBHacc_hot']=shark_hdf5['galaxies']['bh_accretion_rate_hh'][()].astype('float64')/(self.h0*self.Gyr2yr)
+        gal_sv['MBHacc_all']=gal_sv['MBHacc_cold']+gal_sv['MBHacc_hot']
+        # Ejected gas
+        gal_sv['Mgas_lost_SF']=shark_hdf5['galaxies']['mreheated'][()].astype('float64')/self.h0
+        gal_sv['Mgas_lost_QSO']=shark_hdf5['galaxies']['mlost'][()].astype('float64')/self.h0
+        gal_sv['BHspin']=shark_hdf5['galaxies']['bh_spin'][()]
+
+        # Convert to DataFrame
+        gal_sv = pd.DataFrame(gal_sv)
+        gal_sv = gal_sv.drop(gal_sv[gal_sv['Mstar_all'] < 1e8].index)  # Drop low-mass galaxies
+        shark_hdf5.close()
+        return gal_sv
+
+    def process_all_subvolumes(self, sv_list, sharkfiles):
+        # Process data sequentially
+        shark_csv = [self.SHARK_parallel_read(sf, sv) for sf, sv in zip(sharkfiles, sv_list)]
+        return pd.concat(shark_csv, ignore_index=True)
